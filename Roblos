@@ -1,0 +1,307 @@
+local Lighting = game:GetService("Lighting");
+local Players = game:GetService("Players");
+local ReplicatedStorage = game:GetService("ReplicatedStorage");
+local ScriptContext = game:GetService("ScriptContext");
+
+for _, connection in ipairs(getconnections(ScriptContext.Error)) do
+	connection:Disable();
+end
+
+local library = loadstring(game:HttpGet("https://paste.ee/r/omZtZ/0", true))();
+
+local camera = workspace.CurrentCamera;
+local client = Players.LocalPlayer;
+
+local LoadModule = require(ReplicatedStorage.Modules.Load);
+local LoadSharedModule = require(ReplicatedStorage.SharedModules.Load);
+local AnimalModule, BreakableGlassModule, CameraModule, ClientProjectiles, GunItemModule, NetworkModule, PlayerCharacterModule, SharedUtilsModule, UtilsModule; do
+	AnimalModule = LoadModule("Animal");
+	BreakableGlassModule = LoadModule("BreakableGlass");
+	CameraModule = LoadModule("Camera");
+	ClientProjectiles = LoadModule("ClientProjectiles");
+	GunItemModule = LoadModule("GunItem");
+	NetworkModule = LoadSharedModule("Network");
+	PlayerCharacterModule = LoadModule("PlayerCharacter");
+	SharedUtilsModule = LoadSharedModule("SharedUtils");
+	UtilsModule = LoadModule("Utils");
+end
+
+local GetClosestCharacter = function()
+	local ClosestCharacter;
+	local closest = math.huge;
+
+	local center = camera.ViewportSize / 2;
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if (player ~= client) then
+			local character = player.Character;
+
+			if (character) then
+				local vector, visible = camera:WorldToViewportPoint(character.Head.Position);
+
+				if (visible) then
+					local distance = (Vector2.new(vector.X, vector.Y) - center).Magnitude;
+
+					if (distance < closest) then
+						ClosestCharacter = character;
+						closest = distance;
+					end
+				end
+			end
+		end
+	end
+
+	return ClosestCharacter;
+end
+
+local OldFireServer = NetworkModule.FireServer;
+NetworkModule.FireServer = function(self, remote, ...)
+	if (library.flags.InfiniteStamina and remote == "LowerStamina") then return end;
+	if (library.flags.NoFallDamage and remote == "DamageSelf") then return end;
+
+	return OldFireServer(self, remote, ...)
+end
+
+--// Character
+
+local OldCharacterRagdoll = PlayerCharacterModule.Ragdoll;
+PlayerCharacterModule.Ragdoll = function(...)
+	if (library.flags.NoCharacterRagdoll) then return end;
+
+	return OldCharacterRagdoll(...);
+end
+
+local JumpConnection = client.Character and getconnections(client.Character.Humanoid:GetPropertyChangedSignal("Jump"))[1];
+local OldOnCharacterAdded = PlayerCharacterModule.OnCharacterAdded;
+PlayerCharacterModule.OnCharacterAdded = function(self)
+	OldOnCharacterAdded(self);
+	JumpConnection = getconnections(self.Human:GetPropertyChangedSignal("Jump"))[1];
+	if (library.flags.NoJumpCooldown) then
+		JumpConnection:Disable();
+	end
+end
+
+local OldBreakFree = PlayerCharacterModule.BreakFree;
+PlayerCharacterModule.BreakFree = function(self)
+	if (library.flags.InstantBreakFree) then
+		self.BreakFreePerc = 1;
+	end
+	return OldBreakFree(self);
+end
+
+local OldGetUp = PlayerCharacterModule.GetUp;
+PlayerCharacterModule.GetUp = function(self)
+	if (library.flags.InstantGetUp) then
+		local a, b = NetworkModule:InvokeServer("AttemptGetUp");
+		self:OnGetUp(a, b);
+		return;
+	end
+	
+	return OldGetUp(self);
+end
+
+--// Combat
+
+local OldIsFirstPerson = CameraModule.IsFirstPerson;
+CameraModule.IsFirstPerson = function(self)
+	if (library.flags.SilentAim) then
+		if (getfenv(2) == getfenv(GunItemModule.new)) then
+			return true;
+		end
+	end
+	
+	return OldIsFirstPerson(self);
+end
+
+local OldGetMouseHit = UtilsModule.GetMouseHit;
+UtilsModule.GetMouseHit = function(...)
+	local args = {...};
+	
+	if (library.flags.SilentAim) then
+		if (getfenv(2) == getfenv(GunItemModule.new)) then
+			local ClosestCharacter = GetClosestCharacter();
+
+			if (ClosestCharacter) then
+				return ClosestCharacter.Head.Position;
+			end
+		end
+	end
+	
+	return OldGetMouseHit(...);
+end
+
+local OldCalculateRecoil = GunItemModule.CalculateRecoil;
+GunItemModule.CalculateRecoil = function(...)
+	if (library.flags.NoRecoil) then return 0 end;
+	
+	return OldCalculateRecoil(...);
+end
+
+local OldGetProjectileSpread = SharedUtilsModule.GetProjectileSpread;
+SharedUtilsModule.GetProjectileSpread = function(a, b, c, d)
+	if (library.flags.SilentAim or library.flags.NoSpread) then
+		c.accuracy = 1;
+	end
+
+	return OldGetProjectileSpread(a, b, c, d);
+end
+
+local OldOnHit = ClientProjectiles.Projectiles.GunProjectile.OnHit;
+ClientProjectiles.Projectiles.GunProjectile.OnHit = function(self, ...)
+	if (library.flags.InfiniteBulletPenetration) then
+		local OldCheckPenetration = self.CheckPenetration;
+		
+		self.CheckPenetration = function(self)
+			self.PenetrationLeft = 999999;
+			
+			return OldCheckPenetration(self);
+		end
+	end
+	
+	return OldOnHit(self, ...);
+end
+
+--// World
+
+local OldAnimalRagdoll = AnimalModule.Ragdoll;
+AnimalModule.Ragdoll = function(self, ...)
+	if (library.flags.NoHorseRagdoll) then return end;
+	
+	return OldAnimalRagdoll(self, ...);
+end
+
+local OldAnimalBoost = AnimalModule.Boost;
+AnimalModule.Boost = function(self)
+	OldAnimalBoost(self);
+	
+	if (library.flags.InfiniteBoosts) then
+		self.Boosts = self.MaxBoosts;
+	end
+end
+
+--// Miscellaneous
+
+local LightingChangedConnection;
+local Fullbright = function(state)
+	if (state) then
+		LightingChangedConnection = Lighting.Changed:Connect(function()
+			local color = Color3.new(1, 1, 1);
+			Lighting.Ambient = color;
+			Lighting.ColorShift_Bottom = color;
+			Lighting.ColorShift_Top = color;
+		end)
+	else
+		LightingChangedConnection:Disconnect();
+	end
+end
+
+local BreakableGlass = {}; do
+	for k, v in next, debug.getupvalue(BreakableGlassModule.GetBreakableGlass, 1) do
+		if (type(k) == "userdata") then
+			table.insert(BreakableGlass, v.Id);
+		end
+	end
+end
+local BreakAllGlass = function()
+	for _, id in ipairs(BreakableGlass) do
+		NetworkModule:FireServer("BreakGlass", id, Vector3.new());
+	end
+end
+
+local CharacterWindow = library:CreateWindow("Character"); do
+	CharacterWindow:AddToggle({
+		text = "No Ragdoll",
+		flag = "NoCharacterRagdoll"
+	})
+	
+	CharacterWindow:AddToggle({
+		text = "Infinite Stamina",
+		flag = "InfiniteStamina"
+	})
+	
+	CharacterWindow:AddToggle({
+		text = "No Fall Damage",
+		flag = "NoFallDamage"
+	})
+	
+	CharacterWindow:AddToggle({
+		text = "No Jump Cooldown",
+		flag = "NoJumpCooldown",
+		callback = function(state)
+			if (JumpConnection) then
+				if (state) then
+					JumpConnection:Disable();
+				else
+					JumpConnection:Enable();
+				end
+			end
+		end
+	})
+	
+	CharacterWindow:AddToggle({
+		text = "Instant Break Free",
+		flag = "InstantBreakFree"
+	})
+	
+	CharacterWindow:AddToggle({
+		text = "Instant Get Up",
+		flag = "InstantGetUp"
+	})
+end
+
+local GunWindow = library:CreateWindow("Gun"); do
+	GunWindow:AddToggle({
+		text = "Silent Aim",
+		flag = "SilentAim"
+	})
+	
+	GunWindow:AddToggle({
+		text = "No Recoil",
+		flag = "NoRecoil"
+	})
+	
+	GunWindow:AddToggle({
+		text = "No Spread",
+		flag = "NoSpread"
+	})
+	
+	GunWindow:AddToggle({
+		text = "Infinite Bullet Penetration",
+		flag = "InfiniteBulletPenetration"
+	})
+end
+
+local HorseWindow = library:CreateWindow("Horse"); do
+	HorseWindow:AddToggle({
+		text = "No Ragdoll",
+		flag = "NoHorseRagdoll"
+	})
+	
+	HorseWindow:AddToggle({
+		text = "Infinite Boosts",
+		flag = "InfiniteBoosts"
+	})
+end
+
+local MiscellaneousWindow = library:CreateWindow("Miscellaneous"); do
+	MiscellaneousWindow:AddToggle({
+		text = "Fullbright",
+		flag = "Fullbright",
+		callback = Fullbright
+	})
+	
+	MiscellaneousWindow:AddButton({
+		text = "Break All Glass",
+		callback = BreakAllGlass
+	})
+	
+	MiscellaneousWindow:AddBind({
+		text = "UI Visible",
+		key = "RightShift",
+		callback = function()
+			library:Close();
+		end
+	})
+end
+
+library:Init();
